@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import sys
 import os
+import tempfile
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+for path in (ROOT_DIR, REPO_ROOT):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 # optional debug print
 print("Using ROOT_DIR:", ROOT_DIR)
@@ -20,6 +23,8 @@ import streamlit as st
 
 from src.predict import load_bundle, predict_df
 from src.utils import ModelBundle
+from utils.AccAndGyroTransformer import transform_sensor_data
+
 
 def try_parse_datetime_index(df: pd.DataFrame) -> Optional[pd.Series]:
     """
@@ -42,29 +47,92 @@ def load_model_from_default_path() -> ModelBundle:
     return load_bundle(model_path)
 
 
+def _split_acc_gyro_uploads(uploads: list) -> tuple[Optional[object], Optional[object]]:
+    acc_file = gyro_file = None
+    for upload in uploads:
+        name = upload.name.lower()
+        if "acc" in name:
+            acc_file = upload
+        elif "gyro" in name:
+            gyro_file = upload
+
+    if acc_file is not None and gyro_file is not None:
+        return acc_file, gyro_file
+
+    if len(uploads) == 2:
+        return uploads[0], uploads[1]
+
+    return None, None
+
+
+def transform_data(raw_df: pd.DataFrame, gyro_df: pd.DataFrame) -> pd.DataFrame:
+    """Run raw accelerometer and gyroscope DataFrames through transform_sensor_data."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        acc_path = os.path.join(tmpdir, "accelerometer.csv")
+        gyro_path = os.path.join(tmpdir, "gyroscope.csv")
+        output_path = os.path.join(tmpdir, "transformed.csv")
+
+        raw_df.to_csv(acc_path, index=False)
+        gyro_df.to_csv(gyro_path, index=False)
+        transform_sensor_data(acc_path, gyro_path, output_path)
+        return pd.read_csv(output_path)
+
+
 def main() -> None:
     st.set_page_config(page_title="Activity Classifier", layout="wide")
     st.title("Activity Classifier – Sitzen / Stehen / Gehen / Chillen")
 
     with st.sidebar:
         uploaded = st.file_uploader("Upload CSV", type=["csv"])
+        raw_uploaded = st.file_uploader(
+            "Upload raw data for transformer",
+            type=["csv"],
+            accept_multiple_files=True,
+            help="Upload Accelerometer and Gyroscope CSV files from Sensor Logger.",
+        )
         predict_clicked = st.button("Predict", type="primary", use_container_width=True)
 
     col_left, col_right = st.columns([1.2, 1.0], gap="large")
 
-    if uploaded is None:
+    df: Optional[pd.DataFrame] = None
+    transformed_df: Optional[pd.DataFrame] = None
+
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded)
+        except Exception as e:
+            st.error(f"Could not read CSV: {e}")
+            return
+    elif raw_uploaded:
+        raw_files = raw_uploaded if isinstance(raw_uploaded, list) else [raw_uploaded]
+        acc_upload, gyro_upload = _split_acc_gyro_uploads(raw_files)
+        if acc_upload is None or gyro_upload is None:
+            st.error(
+                "Upload both Accelerometer and Gyroscope CSV files for the transformer "
+                "(filenames containing 'acc' and 'gyro' are preferred)."
+            )
+            return
+
+        try:
+            raw_df = pd.read_csv(acc_upload)
+            gyro_df = pd.read_csv(gyro_upload)
+            transformed_df = transform_data(raw_df, gyro_df)
+            df = transformed_df
+        except Exception as e:
+            st.error(f"Could not transform raw sensor data: {e}")
+            return
+
+    if df is None:
         st.info("Upload a CSV in the sidebar to get predictions.")
         return
 
-    try:
-        df = pd.read_csv(uploaded)
-    except Exception as e:
-        st.error(f"Could not read CSV: {e}")
-        return
-
     with col_left:
-        st.subheader("Data preview")
-        st.dataframe(df.head(50), use_container_width=True)
+        if transformed_df is not None:
+            st.subheader("Transformed data preview")
+            st.dataframe(transformed_df.head(50), use_container_width=True)
+        else:
+            st.subheader("Data preview")
+            st.dataframe(df.head(50), use_container_width=True)
 
     if not predict_clicked:
         return
@@ -121,4 +189,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
