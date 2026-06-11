@@ -82,3 +82,11 @@ The app will:
 - preprocess uploaded CSV using the same training preprocessing
 - show predictions + charts (distribution + timeline)
 
+## Data Transformer
+
+To test the model itself, you need to use the app “Sensor Logger” to record the gyroscope and the accelerometer. From the two CSV files, you can then generate a single CSV file that the model can read. Use the AccAndGyroTransformer.py file for this it generates the data needed for the model itself.
+
+```
+python AccAndGyroTransformer.py [Accelerometer.csv] [Gyroscope.csv] [Ausgabedatei.csv] --activity ["sitzen"/"stehen"/"gehen"/"chillen"]
+```
+
